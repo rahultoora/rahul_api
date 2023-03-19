@@ -1,18 +1,37 @@
+import os
+import time
+from dotenv import load_dotenv
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, Response, status, HTTPException
 from pydantic import BaseModel
-from random import randrange
+
+load_dotenv()
+
+dbname=os.getenv('DATABASE')
+host=os.getenv('HOST')
+user=os.getenv('USER')
+
+#connect to DB
+while True:
+    try:
+        conn = psycopg2.connect(f"dbname={dbname} user={user} host={host} port=5432", cursor_factory=RealDictCursor)
+        cursor = conn.cursor()
+        print('Database connection was successful')
+        break
+    except Exception as error:
+        print("Connecting to databse failed")
+        print("Error: ", error)
+        time.sleep(2)
 
 app = FastAPI()
-
-my_posts = [{"title": "title of post 1", "content": "content of post 1", "id": 1},
-            {"title": "favourite foods", "content": "I like pizza", "id": 2}]
 
 # define schema 
 class Post(BaseModel):
     title: str
     content: str 
     published: bool = True
-    rating: int | None = None # optinal so if not provided will be None
+    # rating: int | None = None # optional so if not provided will be None
 
 @app.get("/")
 def root():
@@ -20,14 +39,17 @@ def root():
 
 @app.get("/posts")
 def get_posts():
-    return {"data": my_posts}
+    cursor.execute("""SELECT * FROM fastapi.posts;""")
+    posts = cursor.fetchall()
+    return {"data": posts}
 
 @app.post("/posts", status_code=status.HTTP_201_CREATED)
 def create_posts(post: Post):    
-    post_dict= post.dict()
-    post_dict['id'] = randrange(0,100000)
-    my_posts.append(post_dict)
-    return {"data": post_dict}
+    cursor.execute("""INSERT INTO fastapi.posts(title, content, published) VALUES (%s, %s, %s) RETURNING *;""", (post.title, post.content, post.published))
+    new_post = cursor.fetchone()
+    conn.commit()
+    
+    return {"data": new_post}
 
 
 # @app.get("/posts/latest") # this needs to go before id one as it goes top down
@@ -35,34 +57,39 @@ def create_posts(post: Post):
 #     return {"data": my_posts[-1]}
 
 @app.get("/posts/{id}")
-async def get_post(id: int):
-    post = next((post for post in my_posts if post['id'] == id), None)
+def get_post(id: int):
+    cursor.execute("""SELECT * FROM fastapi.posts WHERE id = %s """, (str(id),))
+    post = cursor.fetchone()
+    
     if not post:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"post with id: {id} was not found")
-    return {"data": post}
+    return {"post_detail": post}
 
 @app.delete("/posts/{id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_post(id: int):
+def delete_post(id: int):
     
-    post = next((post for post in my_posts if post['id'] == id), None)
-    if not post:
+    cursor.execute("""DELETE FROM fastapi.posts WHERE id = %s returning *""", (str(id),))
+    deleted_post = cursor.fetchone()
+    conn.commit()
+    
+    if deleted_post == None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"post with id: {id} was not found")
-    my_posts.remove(post)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @app.put("/posts/{id}")
 def update_post(id: int, post: Post):
     
-    index = next((index for index, post in enumerate(my_posts) if post['id'] == id), None)
-    if index == None:
+    cursor.execute("""UPDATE fastapi.posts SET title = %s, content = %s, published = %s where id = %s RETURNING *""", (post.title, post.content, post.published, str(id)))
+    updated_post = cursor.fetchone()
+    conn.commit()
+    
+
+    if updated_post == None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"post with id: {id} was not found")
-        
-    post_dict = post.dict()
-    post_dict['id'] = id
-    my_posts[index] = post_dict
-    return {"data": post_dict}
+
+    return {"data": updated_post}
     
     
